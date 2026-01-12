@@ -1,0 +1,33 @@
+# AWS Quota Dashboard Configuration
+# Copy this file to config.yaml and customize as needed
+
+# Default region to use when loading the dashboard
+# Recommended: Set to your primary region for faster loading
+default_region: us-east-1
+
+# Default service to filter (leave empty for all services)
+# Common services: ec2, s3, lambda, vpc, rds, elasticloadbalancing, etc.
+# Recommended: Start with ec2 for faster initial load
+default_service: ec2
+
+# Server configuration
+server:
+  port: 8080
+  
+# Cache configuration
+cache:
+  # Cache TTL in minutes - how long to cache AWS API responses
+  ttl_minutes: 5
+
+# Concurrency for fetching quotas from multiple regions
+# Higher values = faster but more API calls
+max_concurrency: 10
+
+# Optional: Specify which regions to show in dropdown
+# Leave empty to load all regions from AWS
+# Uncomment to limit to specific regions:
+# regions:
+#   - us-east-1
+#   - us-west-2
+#   - eu-west-1
+#   - ap-southeast-1

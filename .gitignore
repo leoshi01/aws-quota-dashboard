@@ -28,3 +28,6 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Configuration
+config.yaml

@@ -14,6 +14,7 @@ import (
 type Handler struct {
 	fetcher *aws.QuotaFetcher
 	cache   *cache.Cache
+	config  interface{} // Store config for API access
 }
 
 func New(fetcher *aws.QuotaFetcher, cache *cache.Cache) *Handler {
@@ -21,6 +22,10 @@ func New(fetcher *aws.QuotaFetcher, cache *cache.Cache) *Handler {
 		fetcher: fetcher,
 		cache:   cache,
 	}
+}
+
+func (h *Handler) SetConfig(config interface{}) {
+	h.config = config
 }
 
 func (h *Handler) GetRegions(c *gin.Context) {
@@ -133,4 +138,15 @@ func (h *Handler) Refresh(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Cache cleared successfully",
 	})
+}
+
+func (h *Handler) GetConfig(c *gin.Context) {
+	if h.config == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"default_region":  "us-east-1",
+			"default_service": "ec2",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, h.config)
 }

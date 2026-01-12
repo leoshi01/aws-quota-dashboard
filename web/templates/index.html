@@ -96,10 +96,39 @@
 
     <script>
         let currentQuotas = [];
+        let appConfig = {};
 
         async function init() {
+            await loadConfig();
             await loadRegions();
             await loadServices();
+            
+            // Auto-fetch quotas with default settings
+            if (appConfig.default_region && appConfig.default_service) {
+                await fetchQuotas();
+            }
+        }
+
+        async function loadConfig() {
+            try {
+                const res = await fetch('/api/config');
+                appConfig = await res.json();
+                
+                // Set default values in the form
+                if (appConfig.default_region) {
+                    document.getElementById('region').value = appConfig.default_region;
+                }
+                if (appConfig.default_service) {
+                    // Will be set after services are loaded
+                    setTimeout(() => {
+                        document.getElementById('service').value = appConfig.default_service;
+                    }, 500);
+                }
+                
+                console.log('Config loaded:', appConfig);
+            } catch (err) {
+                console.error('Failed to load config:', err);
+            }
         }
 
         async function loadRegions() {
@@ -120,7 +149,8 @@
 
         async function loadServices() {
             try {
-                const res = await fetch('/api/services');
+                const region = appConfig.default_region || 'us-east-1';
+                const res = await fetch('/api/services?region=' + region);
                 const data = await res.json();
                 const select = document.getElementById('service');
                 data.services.forEach(s => {
@@ -129,6 +159,11 @@
                     option.textContent = s.name;
                     select.appendChild(option);
                 });
+                
+                // Set default service if configured
+                if (appConfig.default_service) {
+                    select.value = appConfig.default_service;
+                }
             } catch (err) {
                 console.error('Failed to load services:', err);
             }
