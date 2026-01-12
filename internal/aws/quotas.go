@@ -168,15 +168,13 @@ func getStatisticFromRecommendation(recommendation *string) string {
 
 func buildCloudWatchDimensions(metricDimensions map[string]string) []cwtypes.Dimension {
 	var dimensions []cwtypes.Dimension
-	if metricDimensions != nil {
-		for key, value := range metricDimensions {
-			k := key
-			v := value
-			dimensions = append(dimensions, cwtypes.Dimension{
-				Name:  &k,
-				Value: &v,
-			})
-		}
+	for key, value := range metricDimensions {
+		k := key
+		v := value
+		dimensions = append(dimensions, cwtypes.Dimension{
+			Name:  &k,
+			Value: &v,
+		})
 	}
 	return dimensions
 }
