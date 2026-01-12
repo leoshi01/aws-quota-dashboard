@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS Quota Dashboard</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator { display: inline-block; }
+        .htmx-request.htmx-indicator { display: inline-block; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">AWS Quota Dashboard</h1>
+            <p class="text-gray-600 mt-2">View and export AWS service quotas across all regions</p>
+        </header>
+
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Region</label>
+                    <select id="region" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="all">All Regions</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Service</label>
+                    <select id="service" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">All Services</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Search</label>
+                    <input type="text" id="search" placeholder="Search quotas..."
+                           class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div class="flex items-end gap-2">
+                    <button onclick="fetchQuotas()"
+                            class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md transition-colors">
+                        <span id="fetch-text">Fetch Quotas</span>
+                        <span id="fetch-loading" class="hidden">Loading...</span>
+                    </button>
+                    <button onclick="refreshCache()"
+                            class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-md transition-colors">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <span id="quota-count" class="text-gray-600">0 quotas</span>
+                    <span id="cache-status" class="ml-2 text-sm text-gray-500"></span>
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="exportJSON()" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm transition-colors">
+                        Export JSON
+                    </button>
+                    <button onclick="exportHTML()" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded text-sm transition-colors">
+                        Export HTML
+                    </button>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Region</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quota Name</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Adjustable</th>
+                        </tr>
+                    </thead>
+                    <tbody id="quota-table" class="bg-white divide-y divide-gray-200">
+                        <tr>
+                            <td colspan="6" class="px-4 py-8 text-center text-gray-500">
+                                Click "Fetch Quotas" to load data
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentQuotas = [];
+
+        async function init() {
+            await loadRegions();
+            await loadServices();
+        }
+
+        async function loadRegions() {
+            try {
+                const res = await fetch('/api/regions');
+                const data = await res.json();
+                const select = document.getElementById('region');
+                data.regions.forEach(r => {
+                    const option = document.createElement('option');
+                    option.value = r.code;
+                    option.textContent = r.code;
+                    select.appendChild(option);
+                });
+            } catch (err) {
+                console.error('Failed to load regions:', err);
+            }
+        }
+
+        async function loadServices() {
+            try {
+                const res = await fetch('/api/services');
+                const data = await res.json();
+                const select = document.getElementById('service');
+                data.services.forEach(s => {
+                    const option = document.createElement('option');
+                    option.value = s.code;
+                    option.textContent = s.name;
+                    select.appendChild(option);
+                });
+            } catch (err) {
+                console.error('Failed to load services:', err);
+            }
+        }
+
+        async function fetchQuotas() {
+            const region = document.getElementById('region').value;
+            const service = document.getElementById('service').value;
+            const search = document.getElementById('search').value;
+
+            document.getElementById('fetch-text').classList.add('hidden');
+            document.getElementById('fetch-loading').classList.remove('hidden');
+
+            try {
+                const params = new URLSearchParams();
+                if (region) params.append('region', region);
+                if (service) params.append('service', service);
+                if (search) params.append('search', search);
+
+                const res = await fetch('/api/quotas?' + params.toString());
+                const data = await res.json();
+                currentQuotas = data.quotas || [];
+
+                document.getElementById('quota-count').textContent = `${data.total} quotas`;
+                document.getElementById('cache-status').textContent = data.from_cache ? '(from cache)' : '(fresh data)';
+
+                renderTable(currentQuotas);
+            } catch (err) {
+                console.error('Failed to fetch quotas:', err);
+                alert('Failed to fetch quotas: ' + err.message);
+            } finally {
+                document.getElementById('fetch-text').classList.remove('hidden');
+                document.getElementById('fetch-loading').classList.add('hidden');
+            }
+        }
+
+        function renderTable(quotas) {
+            const tbody = document.getElementById('quota-table');
+            if (quotas.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="px-4 py-8 text-center text-gray-500">
+                            No quotas found
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = quotas.map(q => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-3 text-sm text-gray-900">${q.region}</td>
+                    <td class="px-4 py-3 text-sm text-gray-900">${q.service_name}</td>
+                    <td class="px-4 py-3 text-sm text-gray-900">${q.quota_name}</td>
+                    <td class="px-4 py-3 text-sm text-gray-900">${q.value.toLocaleString()}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500">${q.unit}</td>
+                    <td class="px-4 py-3 text-sm">
+                        <span class="px-2 py-1 text-xs rounded ${q.adjustable ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                            ${q.adjustable ? 'Yes' : 'No'}
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function refreshCache() {
+            try {
+                await fetch('/api/refresh', { method: 'POST' });
+                alert('Cache cleared successfully');
+            } catch (err) {
+                alert('Failed to clear cache: ' + err.message);
+            }
+        }
+
+        function exportJSON() {
+            const region = document.getElementById('region').value;
+            const service = document.getElementById('service').value;
+            const params = new URLSearchParams();
+            if (region) params.append('region', region);
+            if (service) params.append('service', service);
+            window.location.href = '/api/export/json?' + params.toString();
+        }
+
+        function exportHTML() {
+            const region = document.getElementById('region').value;
+            const service = document.getElementById('service').value;
+            const params = new URLSearchParams();
+            if (region) params.append('region', region);
+            if (service) params.append('service', service);
+            window.location.href = '/api/export/html?' + params.toString();
+        }
+
+        document.getElementById('search').addEventListener('input', function() {
+            const search = this.value.toLowerCase();
+            if (currentQuotas.length > 0) {
+                const filtered = currentQuotas.filter(q =>
+                    q.quota_name.toLowerCase().includes(search) ||
+                    q.service_name.toLowerCase().includes(search) ||
+                    q.service_code.toLowerCase().includes(search)
+                );
+                renderTable(filtered);
+                document.getElementById('quota-count').textContent = `${filtered.length} quotas`;
+            }
+        });
+
+        init();
+    </script>
+</body>
+</html>
