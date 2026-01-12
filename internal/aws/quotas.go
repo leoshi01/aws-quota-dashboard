@@ -139,16 +139,37 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 
 	quota.HasUsageMetrics = true
 
-	// Determine the statistic to use (default to Maximum if not specified)
-	stat := "Maximum"
-	if usageMetric.MetricStatisticRecommendation != nil && *usageMetric.MetricStatisticRecommendation != "" {
-		stat = *usageMetric.MetricStatisticRecommendation
+	stat := getStatisticFromRecommendation(usageMetric.MetricStatisticRecommendation)
+	dimensions := buildCloudWatchDimensions(usageMetric.MetricDimensions)
+
+	result, err := f.queryCloudWatch(ctx, cwClient, usageMetric, dimensions, stat)
+	if err != nil {
+		log.Printf("CloudWatch query failed for %s/%s: %v",
+			safeString(usageMetric.MetricNamespace),
+			safeString(usageMetric.MetricName), err)
+		return
 	}
 
-	// Prepare dimensions
+	log.Printf("CloudWatch query for %s - %s: namespace=%s, metric=%s, datapoints=%d",
+		quota.ServiceCode, quota.QuotaName,
+		safeString(usageMetric.MetricNamespace),
+		safeString(usageMetric.MetricName),
+		len(result.Datapoints))
+
+	f.processCloudWatchResult(result, stat, quota)
+}
+
+func getStatisticFromRecommendation(recommendation *string) string {
+	if recommendation != nil && *recommendation != "" {
+		return *recommendation
+	}
+	return "Maximum"
+}
+
+func buildCloudWatchDimensions(metricDimensions map[string]string) []cwtypes.Dimension {
 	var dimensions []cwtypes.Dimension
-	if usageMetric.MetricDimensions != nil {
-		for key, value := range usageMetric.MetricDimensions {
+	if metricDimensions != nil {
+		for key, value := range metricDimensions {
 			k := key
 			v := value
 			dimensions = append(dimensions, cwtypes.Dimension{
@@ -157,9 +178,10 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 			})
 		}
 	}
+	return dimensions
+}
 
-	// Query CloudWatch for the last data point
-	// Try last 24 hours first, then expand if no data
+func (f *QuotaFetcher) queryCloudWatch(ctx context.Context, cwClient *cloudwatch.Client, usageMetric *sqtypes.MetricInfo, dimensions []cwtypes.Dimension, stat string) (*cloudwatch.GetMetricStatisticsOutput, error) {
 	endTime := time.Now()
 	startTime := endTime.Add(-24 * time.Hour)
 
@@ -169,73 +191,72 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 		Dimensions: dimensions,
 		StartTime:  &startTime,
 		EndTime:    &endTime,
-		Period:     aws.Int32(300), // 5 minutes period for more recent data
+		Period:     aws.Int32(300),
 		Statistics: []cwtypes.Statistic{cwtypes.Statistic(stat)},
 	}
 
-	// Query CloudWatch
-	result, err := cwClient.GetMetricStatistics(ctx, input)
-	if err != nil {
-		log.Printf("CloudWatch query failed for %s/%s: %v",
-			safeString(usageMetric.MetricNamespace),
-			safeString(usageMetric.MetricName), err)
+	return cwClient.GetMetricStatistics(ctx, input)
+}
+
+func (f *QuotaFetcher) processCloudWatchResult(result *cloudwatch.GetMetricStatisticsOutput, stat string, quota *model.Quota) {
+	if len(result.Datapoints) == 0 {
+		log.Printf("  ✗ No datapoints found for %s - %s", quota.ServiceCode, quota.QuotaName)
 		return
 	}
 
-	// Debug log
-	log.Printf("CloudWatch query for %s - %s: namespace=%s, metric=%s, datapoints=%d",
-		quota.ServiceCode, quota.QuotaName,
-		safeString(usageMetric.MetricNamespace),
-		safeString(usageMetric.MetricName),
-		len(result.Datapoints))
+	latestDatapoint := findLatestDatapoint(result.Datapoints)
+	if latestDatapoint == nil {
+		return
+	}
 
-	// Find the most recent data point
-	if len(result.Datapoints) > 0 {
-		var latestDatapoint *cwtypes.Datapoint
-		for i := range result.Datapoints {
-			if latestDatapoint == nil || result.Datapoints[i].Timestamp.After(*latestDatapoint.Timestamp) {
-				latestDatapoint = &result.Datapoints[i]
-			}
+	value := extractValueFromDatapoint(latestDatapoint, stat)
+	if value > 0 {
+		updateQuotaUsage(quota, value)
+		log.Printf("  ✓ Usage found: %.2f / %.2f (%.1f%%)",
+			quota.Usage, quota.Value, quota.UsagePercentage)
+	}
+}
+
+func findLatestDatapoint(datapoints []cwtypes.Datapoint) *cwtypes.Datapoint {
+	var latest *cwtypes.Datapoint
+	for i := range datapoints {
+		if latest == nil || datapoints[i].Timestamp.After(*latest.Timestamp) {
+			latest = &datapoints[i]
 		}
+	}
+	return latest
+}
 
-		if latestDatapoint != nil {
-			// Extract the value based on the statistic
-			var value float64
-			switch stat {
-			case "Maximum":
-				if latestDatapoint.Maximum != nil {
-					value = *latestDatapoint.Maximum
-				}
-			case "Average":
-				if latestDatapoint.Average != nil {
-					value = *latestDatapoint.Average
-				}
-			case "Sum":
-				if latestDatapoint.Sum != nil {
-					value = *latestDatapoint.Sum
-				}
-			case "Minimum":
-				if latestDatapoint.Minimum != nil {
-					value = *latestDatapoint.Minimum
-				}
-			default:
-				if latestDatapoint.Maximum != nil {
-					value = *latestDatapoint.Maximum
-				}
-			}
-
-			if value > 0 {
-				quota.Usage = value
-				// Calculate usage percentage
-				if quota.Value > 0 {
-					quota.UsagePercentage = (quota.Usage / quota.Value) * 100
-				}
-				log.Printf("  ✓ Usage found: %.2f / %.2f (%.1f%%)",
-					quota.Usage, quota.Value, quota.UsagePercentage)
-			}
+func extractValueFromDatapoint(datapoint *cwtypes.Datapoint, stat string) float64 {
+	switch stat {
+	case "Maximum":
+		if datapoint.Maximum != nil {
+			return *datapoint.Maximum
 		}
-	} else {
-		log.Printf("  ✗ No datapoints found for %s - %s", quota.ServiceCode, quota.QuotaName)
+	case "Average":
+		if datapoint.Average != nil {
+			return *datapoint.Average
+		}
+	case "Sum":
+		if datapoint.Sum != nil {
+			return *datapoint.Sum
+		}
+	case "Minimum":
+		if datapoint.Minimum != nil {
+			return *datapoint.Minimum
+		}
+	default:
+		if datapoint.Maximum != nil {
+			return *datapoint.Maximum
+		}
+	}
+	return 0
+}
+
+func updateQuotaUsage(quota *model.Quota, value float64) {
+	quota.Usage = value
+	if quota.Value > 0 {
+		quota.UsagePercentage = (quota.Usage / quota.Value) * 100
 	}
 }
 
