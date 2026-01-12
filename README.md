@@ -16,12 +16,23 @@ A simple, fast web dashboard to view and export AWS service quotas across all re
 
 - Go 1.21+
 - AWS credentials configured (`~/.aws/credentials` or environment variables)
+- IAM permissions (see [iam-policy.json](iam-policy.json))
+
+### IAM Permissions
+
+Minimum required permissions:
+- `servicequotas:ListServices`
+- `servicequotas:ListServiceQuotas`
+- `servicequotas:GetServiceQuota`
+- `ec2:DescribeRegions`
+
+Or attach AWS managed policies: `ServiceQuotasReadOnlyAccess` + `AmazonEC2ReadOnlyAccess`
 
 ### Run Locally
 
 ```bash
 # Clone the repository
-git clone https://github.com/yuxishi/aws-quota-dashboard.git
+git clone https://github.com/leoshi01/aws-quota-dashboard.git
 cd aws-quota-dashboard
 
 # Install dependencies

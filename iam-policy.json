@@ -1,0 +1,23 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ServiceQuotasReadOnly",
+            "Effect": "Allow",
+            "Action": [
+                "servicequotas:ListServices",
+                "servicequotas:ListServiceQuotas",
+                "servicequotas:GetServiceQuota"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "EC2DescribeRegions",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeRegions"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
