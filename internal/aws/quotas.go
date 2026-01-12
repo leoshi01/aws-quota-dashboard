@@ -105,10 +105,63 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 			if q.Value != nil {
 				quota.Value = *q.Value
 			}
+			
+			// Try to get usage metrics
+			f.enrichWithUsageMetrics(ctx, client, &quota)
+			
 			quotas = append(quotas, quota)
 		}
 	}
 	return quotas, nil
+}
+
+func (f *QuotaFetcher) enrichWithUsageMetrics(ctx context.Context, client *servicequotas.Client, quota *model.Quota) {
+	// Skip if quota code is empty
+	if quota.QuotaCode == "" {
+		return
+	}
+
+	input := &servicequotas.GetAWSDefaultServiceQuotaInput{
+		ServiceCode: &quota.ServiceCode,
+		QuotaCode:   &quota.QuotaCode,
+	}
+
+	output, err := client.GetAWSDefaultServiceQuota(ctx, input)
+	if err != nil {
+		// Usage metrics may not be available for all quotas
+		return
+	}
+
+	if output.Quota != nil && output.Quota.UsageMetric != nil {
+		// Usage metrics are available
+		quota.HasUsageMetrics = true
+		
+		// Try to get the actual usage value
+		if output.Quota.UsageMetric.MetricStatisticRecommendation != nil {
+			// The usage metric data would typically come from CloudWatch
+			// For now, we mark that metrics are available
+			// In a production system, you'd query CloudWatch here
+			
+			// Note: The actual usage would require CloudWatch API calls
+			// which can be added based on the metric dimensions
+		}
+	}
+
+	// Alternative: try to get applied quota which might have usage info
+	appliedInput := &servicequotas.GetServiceQuotaInput{
+		ServiceCode: &quota.ServiceCode,
+		QuotaCode:   &quota.QuotaCode,
+	}
+
+	appliedOutput, err := client.GetServiceQuota(ctx, appliedInput)
+	if err == nil && appliedOutput.Quota != nil && appliedOutput.Quota.UsageMetric != nil {
+		quota.HasUsageMetrics = true
+	}
+
+	// Calculate usage percentage if both usage and value are available
+	if quota.Usage > 0 && quota.Value > 0 {
+		quota.UsagePercentage = (quota.Usage / quota.Value) * 100
+	}
 }
 
 func (f *QuotaFetcher) GetQuotasForAllRegions(ctx context.Context, regions []string, serviceFilter string) ([]model.Quota, error) {
