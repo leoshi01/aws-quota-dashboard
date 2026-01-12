@@ -19,7 +19,7 @@ func (h *Handler) ExportJSON(c *gin.Context) {
 	if cached, ok := h.cache.Get(cacheKey); ok {
 		if quotas, ok = cached.([]model.Quota); !ok {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Invalid cache data type",
+				"error": errInvalidCacheDataType,
 			})
 			return
 		}
@@ -49,7 +49,7 @@ func (h *Handler) ExportHTML(c *gin.Context) {
 
 	if cached, ok := h.cache.Get(cacheKey); ok {
 		if quotas, ok = cached.([]model.Quota); !ok {
-			c.String(http.StatusInternalServerError, "Invalid cache data type")
+			c.String(http.StatusInternalServerError, errInvalidCacheDataType)
 			return
 		}
 	} else {

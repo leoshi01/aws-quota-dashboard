@@ -11,6 +11,10 @@ import (
 	"github.com/yuxishi/aws-quota-dashboard/internal/model"
 )
 
+const (
+	errInvalidCacheDataType = "Invalid cache data type"
+)
+
 type Handler struct {
 	fetcher *aws.QuotaFetcher
 	cache   *cache.Cache
@@ -96,7 +100,7 @@ func (h *Handler) GetQuotas(c *gin.Context) {
 
 	if cached, ok := h.cache.Get(cacheKey); ok {
 		if quotas, ok = cached.([]model.Quota); !ok {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid cache data type"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": errInvalidCacheDataType})
 			return
 		}
 		fromCache = true
