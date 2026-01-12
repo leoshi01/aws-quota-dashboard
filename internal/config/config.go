@@ -8,12 +8,12 @@ import (
 )
 
 type Config struct {
-	DefaultRegion  string         `yaml:"default_region"`
-	DefaultService string         `yaml:"default_service"`
-	Server         ServerConfig   `yaml:"server"`
-	Cache          CacheConfig    `yaml:"cache"`
-	MaxConcurrency int            `yaml:"max_concurrency"`
-	Regions        []string       `yaml:"regions"`
+	DefaultRegion  string       `yaml:"default_region"`
+	DefaultService string       `yaml:"default_service"`
+	Server         ServerConfig `yaml:"server"`
+	Cache          CacheConfig  `yaml:"cache"`
+	MaxConcurrency int          `yaml:"max_concurrency"`
+	Regions        []string     `yaml:"regions"`
 }
 
 type ServerConfig struct {

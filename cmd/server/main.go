@@ -27,7 +27,7 @@ func main() {
 	c := cache.New(cacheTTL)
 	fetcher := aws.NewQuotaFetcher(cfg.MaxConcurrency)
 	h := handler.New(fetcher, c)
-	
+
 	// Set config for API access
 	h.SetConfig(map[string]interface{}{
 		"default_region":  cfg.DefaultRegion,
