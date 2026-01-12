@@ -95,7 +95,10 @@ func (h *Handler) GetQuotas(c *gin.Context) {
 	fromCache := false
 
 	if cached, ok := h.cache.Get(cacheKey); ok {
-		quotas = cached.([]model.Quota)
+		if quotas, ok = cached.([]model.Quota); !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid cache data type"})
+			return
+		}
 		fromCache = true
 	} else {
 		var err error
