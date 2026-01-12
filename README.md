@@ -6,9 +6,12 @@ A simple, fast web dashboard to view and export AWS service quotas across all re
 
 - **Multi-region Support** - Query quotas across all AWS regions concurrently
 - **All Services** - Access quotas for all AWS services via Service Quotas API
-- **Smart Caching** - 5-minute TTL cache to reduce API calls
+- **Usage Metrics** - View current usage, limits, and usage percentage for quotas
+- **Smart Defaults** - Configure default region and service for faster loading
+- **Smart Caching** - Configurable TTL cache to reduce API calls
 - **Multiple Export Formats** - JSON and HTML report export
 - **Clean Web UI** - Simple single-page interface with filtering and search
+- **Visual Warnings** - Color-coded usage percentages (red ≥90%, orange ≥75%, yellow ≥50%)
 
 ## Quick Start
 
@@ -25,8 +28,10 @@ Minimum required permissions:
 - `servicequotas:ListServiceQuotas`
 - `servicequotas:GetServiceQuota`
 - `ec2:DescribeRegions`
+- `cloudwatch:GetMetricStatistics` (for usage metrics)
+- `cloudwatch:ListMetrics` (for usage metrics)
 
-Or attach AWS managed policies: `ServiceQuotasReadOnlyAccess` + `AmazonEC2ReadOnlyAccess`
+Or attach AWS managed policies: `ServiceQuotasReadOnlyAccess` + `AmazonEC2ReadOnlyAccess` + `CloudWatchReadOnlyAccess`
 
 ### Run Locally
 
@@ -37,6 +42,9 @@ cd aws-quota-dashboard
 
 # Install dependencies
 go mod download
+
+# (Optional) Configure defaults - create config.yaml
+# See Configuration section below
 
 # Run the server
 make run
@@ -63,6 +71,7 @@ docker run -p 8080:8080 \
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/api/config` | Get current configuration (default region, service) |
 | GET | `/api/regions` | List all enabled AWS regions |
 | GET | `/api/services` | List all available services |
 | GET | `/api/quotas` | Get quotas (supports `region`, `service`, `search` params) |
@@ -82,9 +91,40 @@ GET /api/quotas?region=us-east-1&service=ec2&search=instance
 
 ## Configuration
 
+### Configuration File
+
+Create a `config.yaml` file in the project root to customize defaults:
+
+```yaml
+# Default region to use when loading the dashboard
+default_region: us-east-1
+
+# Default service to filter (speeds up initial load)
+default_service: ec2
+
+# Server configuration
+server:
+  port: 8080
+  
+# Cache configuration (in minutes)
+cache:
+  ttl_minutes: 5
+
+# Concurrency for fetching quotas from multiple regions
+max_concurrency: 10
+```
+
+**Benefits of using config.yaml:**
+- 🚀 **Faster Loading** - Start with a specific region and service (e.g., us-east-1 + ec2) instead of loading all regions
+- ⚡ **Reduced API Calls** - Fewer requests to AWS Service Quotas API
+- 🎯 **Better UX** - Dashboard loads with meaningful data immediately
+- 💰 **Lower Costs** - Reduced API usage
+
+### Environment Variables
+
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `PORT` | `8080` | Server port |
+| `PORT` | `8080` | Server port (overrides config.yaml) |
 | `AWS_REGION` | `us-east-1` | Default AWS region |
 | `AWS_ACCESS_KEY_ID` | - | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | - | AWS secret key |
@@ -97,9 +137,11 @@ aws-quota-dashboard/
 ├── internal/
 │   ├── aws/                # AWS SDK wrappers
 │   ├── cache/              # In-memory cache
+│   ├── config/             # Configuration management
 │   ├── handler/            # HTTP handlers
 │   └── model/              # Data models
 ├── web/templates/          # HTML templates
+├── config.yaml             # Configuration file (optional)
 ├── Dockerfile
 ├── Makefile
 └── README.md

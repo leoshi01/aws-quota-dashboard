@@ -18,6 +18,15 @@
                 "ec2:DescribeRegions"
             ],
             "Resource": "*"
+        },
+        {
+            "Sid": "CloudWatchGetMetrics",
+            "Effect": "Allow",
+            "Action": [
+                "cloudwatch:GetMetricStatistics",
+                "cloudwatch:ListMetrics"
+            ],
+            "Resource": "*"
         }
     ]
 }
