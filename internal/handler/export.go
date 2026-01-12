@@ -17,7 +17,12 @@ func (h *Handler) ExportJSON(c *gin.Context) {
 	var quotas []model.Quota
 
 	if cached, ok := h.cache.Get(cacheKey); ok {
-		quotas = cached.([]model.Quota)
+		if quotas, ok = cached.([]model.Quota); !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Invalid cache data type",
+			})
+			return
+		}
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "No data available. Please fetch quotas first.",
@@ -43,7 +48,10 @@ func (h *Handler) ExportHTML(c *gin.Context) {
 	var quotas []model.Quota
 
 	if cached, ok := h.cache.Get(cacheKey); ok {
-		quotas = cached.([]model.Quota)
+		if quotas, ok = cached.([]model.Quota); !ok {
+			c.String(http.StatusInternalServerError, "Invalid cache data type")
+			return
+		}
 	} else {
 		c.String(http.StatusBadRequest, "No data available. Please fetch quotas first.")
 		return
