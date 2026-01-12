@@ -2,9 +2,15 @@ package aws
 
 import (
 	"context"
+	"log"
 	"strings"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
+	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
+	sqtypes "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
 	"github.com/yuxishi/aws-quota-dashboard/internal/model"
 	"golang.org/x/sync/errgroup"
 )
@@ -86,6 +92,15 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 		ServiceCode: &svc.Code,
 	})
 
+	// Create CloudWatch client for this region
+	cfg, err := LoadConfig(ctx, region)
+	if err != nil {
+		return quotas, err
+	}
+	cwClient := cloudwatch.NewFromConfig(cfg)
+
+	log.Printf("Fetching quotas for service: %s (%s) in region: %s", svc.Name, svc.Code, region)
+
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
@@ -105,10 +120,142 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 			if q.Value != nil {
 				quota.Value = *q.Value
 			}
+
+			// Try to get usage metrics from CloudWatch
+			if q.UsageMetric != nil {
+				f.enrichWithUsageFromCloudWatch(ctx, cwClient, q.UsageMetric, &quota)
+			}
+
 			quotas = append(quotas, quota)
 		}
 	}
 	return quotas, nil
+}
+
+func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClient *cloudwatch.Client, usageMetric *sqtypes.MetricInfo, quota *model.Quota) {
+	if usageMetric.MetricNamespace == nil || usageMetric.MetricName == nil {
+		return
+	}
+
+	quota.HasUsageMetrics = true
+
+	stat := getStatisticFromRecommendation(usageMetric.MetricStatisticRecommendation)
+	dimensions := buildCloudWatchDimensions(usageMetric.MetricDimensions)
+
+	result, err := f.queryCloudWatch(ctx, cwClient, usageMetric, dimensions, stat)
+	if err != nil {
+		log.Printf("CloudWatch query failed for %s/%s: %v",
+			safeString(usageMetric.MetricNamespace),
+			safeString(usageMetric.MetricName), err)
+		return
+	}
+
+	log.Printf("CloudWatch query for %s - %s: namespace=%s, metric=%s, datapoints=%d",
+		quota.ServiceCode, quota.QuotaName,
+		safeString(usageMetric.MetricNamespace),
+		safeString(usageMetric.MetricName),
+		len(result.Datapoints))
+
+	f.processCloudWatchResult(result, stat, quota)
+}
+
+func getStatisticFromRecommendation(recommendation *string) string {
+	if recommendation != nil && *recommendation != "" {
+		return *recommendation
+	}
+	return "Maximum"
+}
+
+func buildCloudWatchDimensions(metricDimensions map[string]string) []cwtypes.Dimension {
+	var dimensions []cwtypes.Dimension
+	for key, value := range metricDimensions {
+		k := key
+		v := value
+		dimensions = append(dimensions, cwtypes.Dimension{
+			Name:  &k,
+			Value: &v,
+		})
+	}
+	return dimensions
+}
+
+func (f *QuotaFetcher) queryCloudWatch(ctx context.Context, cwClient *cloudwatch.Client, usageMetric *sqtypes.MetricInfo, dimensions []cwtypes.Dimension, stat string) (*cloudwatch.GetMetricStatisticsOutput, error) {
+	endTime := time.Now()
+	startTime := endTime.Add(-24 * time.Hour)
+
+	input := &cloudwatch.GetMetricStatisticsInput{
+		Namespace:  usageMetric.MetricNamespace,
+		MetricName: usageMetric.MetricName,
+		Dimensions: dimensions,
+		StartTime:  &startTime,
+		EndTime:    &endTime,
+		Period:     aws.Int32(300),
+		Statistics: []cwtypes.Statistic{cwtypes.Statistic(stat)},
+	}
+
+	return cwClient.GetMetricStatistics(ctx, input)
+}
+
+func (f *QuotaFetcher) processCloudWatchResult(result *cloudwatch.GetMetricStatisticsOutput, stat string, quota *model.Quota) {
+	if len(result.Datapoints) == 0 {
+		log.Printf("  ✗ No datapoints found for %s - %s", quota.ServiceCode, quota.QuotaName)
+		return
+	}
+
+	latestDatapoint := findLatestDatapoint(result.Datapoints)
+	if latestDatapoint == nil {
+		return
+	}
+
+	value := extractValueFromDatapoint(latestDatapoint, stat)
+	if value > 0 {
+		updateQuotaUsage(quota, value)
+		log.Printf("  ✓ Usage found: %.2f / %.2f (%.1f%%)",
+			quota.Usage, quota.Value, quota.UsagePercentage)
+	}
+}
+
+func findLatestDatapoint(datapoints []cwtypes.Datapoint) *cwtypes.Datapoint {
+	var latest *cwtypes.Datapoint
+	for i := range datapoints {
+		if latest == nil || datapoints[i].Timestamp.After(*latest.Timestamp) {
+			latest = &datapoints[i]
+		}
+	}
+	return latest
+}
+
+func extractValueFromDatapoint(datapoint *cwtypes.Datapoint, stat string) float64 {
+	switch stat {
+	case "Maximum":
+		if datapoint.Maximum != nil {
+			return *datapoint.Maximum
+		}
+	case "Average":
+		if datapoint.Average != nil {
+			return *datapoint.Average
+		}
+	case "Sum":
+		if datapoint.Sum != nil {
+			return *datapoint.Sum
+		}
+	case "Minimum":
+		if datapoint.Minimum != nil {
+			return *datapoint.Minimum
+		}
+	default:
+		if datapoint.Maximum != nil {
+			return *datapoint.Maximum
+		}
+	}
+	return 0
+}
+
+func updateQuotaUsage(quota *model.Quota, value float64) {
+	quota.Usage = value
+	if quota.Value > 0 {
+		quota.UsagePercentage = (quota.Usage / quota.Value) * 100
+	}
 }
 
 func (f *QuotaFetcher) GetQuotasForAllRegions(ctx context.Context, regions []string, serviceFilter string) ([]model.Quota, error) {

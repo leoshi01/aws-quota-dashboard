@@ -75,14 +75,16 @@
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Region</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quota Name</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Usage</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Limit</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Usage %</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Adjustable</th>
                         </tr>
                     </thead>
                     <tbody id="quota-table" class="bg-white divide-y divide-gray-200">
                         <tr>
-                            <td colspan="6" class="px-4 py-8 text-center text-gray-500">
+                            <td colspan="8" class="px-4 py-8 text-center text-gray-500">
                                 Click "Fetch Quotas" to load data
                             </td>
                         </tr>
@@ -94,10 +96,37 @@
 
     <script>
         let currentQuotas = [];
+        let appConfig = {};
 
         async function init() {
+            await loadConfig();
             await loadRegions();
             await loadServices();
+            
+            // Auto-fetch quotas with default settings
+            if (appConfig.default_region && appConfig.default_service) {
+                await fetchQuotas();
+            }
+        }
+
+        async function loadConfig() {
+            try {
+                const res = await fetch('/api/config');
+                appConfig = await res.json();
+                
+                // Set default region immediately
+                if (appConfig.default_region) {
+                    document.getElementById('region').value = appConfig.default_region;
+                }
+                
+                // Default service will be set after services are loaded in loadServices()
+                console.log('Config loaded:', appConfig);
+            } catch (err) {
+                console.error('Failed to load config:', err);
+                // Set fallback defaults
+                appConfig.default_region = 'us-east-1';
+                appConfig.default_service = 'ec2';
+            }
         }
 
         async function loadRegions() {
@@ -118,15 +147,33 @@
 
         async function loadServices() {
             try {
-                const res = await fetch('/api/services');
+                const region = appConfig.default_region || 'us-east-1';
+                const res = await fetch('/api/services?region=' + region);
                 const data = await res.json();
                 const select = document.getElementById('service');
+                
+                // Clear existing options (except "All Services")
+                while (select.options.length > 1) {
+                    select.remove(1);
+                }
+                
                 data.services.forEach(s => {
                     const option = document.createElement('option');
                     option.value = s.code;
                     option.textContent = s.name;
                     select.appendChild(option);
                 });
+                
+                // Set default service (fallback to 'ec2' if not configured)
+                const defaultService = appConfig.default_service || 'ec2';
+                select.value = defaultService;
+                
+                // Verify the selection worked
+                if (select.value !== defaultService) {
+                    console.warn(`Could not set default service to ${defaultService}, service may not exist in region`);
+                } else {
+                    console.log(`Default service set to: ${defaultService}`);
+                }
             } catch (err) {
                 console.error('Failed to load services:', err);
             }
@@ -168,7 +215,7 @@
             if (quotas.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="6" class="px-4 py-8 text-center text-gray-500">
+                        <td colspan="8" class="px-4 py-8 text-center text-gray-500">
                             No quotas found
                         </td>
                     </tr>
@@ -176,12 +223,41 @@
                 return;
             }
 
-            tbody.innerHTML = quotas.map(q => `
+            tbody.innerHTML = quotas.map(q => {
+                const usage = q.usage || 0;
+                const usagePercent = q.usage_percentage || 0;
+                const hasUsage = q.has_usage_metrics;
+                
+                let usageClass = '';
+                if (usagePercent >= 90) {
+                    usageClass = 'text-red-600 font-semibold';
+                } else if (usagePercent >= 75) {
+                    usageClass = 'text-orange-600 font-semibold';
+                } else if (usagePercent >= 50) {
+                    usageClass = 'text-yellow-600';
+                }
+                
+                // Format usage display
+                let usageDisplay = '<span class="text-gray-400">N/A</span>';
+                let percentDisplay = '<span class="text-gray-400">N/A</span>';
+                
+                if (hasUsage) {
+                    usageDisplay = usage.toLocaleString();
+                    percentDisplay = usagePercent.toFixed(1) + '%';
+                }
+                
+                return `
                 <tr class="hover:bg-gray-50">
                     <td class="px-4 py-3 text-sm text-gray-900">${q.region}</td>
                     <td class="px-4 py-3 text-sm text-gray-900">${q.service_name}</td>
                     <td class="px-4 py-3 text-sm text-gray-900">${q.quota_name}</td>
+                    <td class="px-4 py-3 text-sm text-gray-900">
+                        ${usageDisplay}
+                    </td>
                     <td class="px-4 py-3 text-sm text-gray-900">${q.value.toLocaleString()}</td>
+                    <td class="px-4 py-3 text-sm ${usageClass}">
+                        ${percentDisplay}
+                    </td>
                     <td class="px-4 py-3 text-sm text-gray-500">${q.unit}</td>
                     <td class="px-4 py-3 text-sm">
                         <span class="px-2 py-1 text-xs rounded ${q.adjustable ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
@@ -189,7 +265,8 @@
                         </span>
                     </td>
                 </tr>
-            `).join('');
+                `;
+            }).join('');
         }
 
         async function refreshCache() {

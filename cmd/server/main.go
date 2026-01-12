@@ -5,24 +5,34 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yuxishi/aws-quota-dashboard/internal/aws"
 	"github.com/yuxishi/aws-quota-dashboard/internal/cache"
+	"github.com/yuxishi/aws-quota-dashboard/internal/config"
 	"github.com/yuxishi/aws-quota-dashboard/internal/handler"
 )
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	// Load configuration
+	cfg, err := config.Load("config.yaml")
+	if err != nil {
+		log.Printf("Warning: failed to load config.yaml, using defaults: %v", err)
+		cfg = config.Default()
 	}
+	log.Printf("Configuration loaded: default_region=%s, default_service=%s", cfg.DefaultRegion, cfg.DefaultService)
 
-	cacheTTL := 5 * time.Minute
+	port := cfg.GetPort()
+	cacheTTL := cfg.GetCacheTTL()
 	c := cache.New(cacheTTL)
-	fetcher := aws.NewQuotaFetcher(10)
+	fetcher := aws.NewQuotaFetcher(cfg.MaxConcurrency)
 	h := handler.New(fetcher, c)
+
+	// Set config for API access
+	h.SetConfig(map[string]interface{}{
+		"default_region":  cfg.DefaultRegion,
+		"default_service": cfg.DefaultService,
+	})
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
@@ -37,6 +47,7 @@ func main() {
 
 	api := r.Group("/api")
 	{
+		api.GET("/config", h.GetConfig)
 		api.GET("/regions", h.GetRegions)
 		api.GET("/services", h.GetServices)
 		api.GET("/quotas", h.GetQuotas)
