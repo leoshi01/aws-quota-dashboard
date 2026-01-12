@@ -237,17 +237,26 @@
                     usageClass = 'text-yellow-600';
                 }
                 
+                // Format usage display
+                let usageDisplay = '<span class="text-gray-400">N/A</span>';
+                let percentDisplay = '<span class="text-gray-400">N/A</span>';
+                
+                if (hasUsage) {
+                    usageDisplay = usage.toLocaleString();
+                    percentDisplay = usagePercent.toFixed(1) + '%';
+                }
+                
                 return `
                 <tr class="hover:bg-gray-50">
                     <td class="px-4 py-3 text-sm text-gray-900">${q.region}</td>
                     <td class="px-4 py-3 text-sm text-gray-900">${q.service_name}</td>
                     <td class="px-4 py-3 text-sm text-gray-900">${q.quota_name}</td>
                     <td class="px-4 py-3 text-sm text-gray-900">
-                        ${hasUsage ? usage.toLocaleString() : '<span class="text-gray-400">N/A</span>'}
+                        ${usageDisplay}
                     </td>
                     <td class="px-4 py-3 text-sm text-gray-900">${q.value.toLocaleString()}</td>
                     <td class="px-4 py-3 text-sm ${usageClass}">
-                        ${hasUsage ? usagePercent.toFixed(1) + '%' : '<span class="text-gray-400">N/A</span>'}
+                        ${percentDisplay}
                     </td>
                     <td class="px-4 py-3 text-sm text-gray-500">${q.unit}</td>
                     <td class="px-4 py-3 text-sm">

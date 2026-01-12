@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -98,6 +99,8 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 	}
 	cwClient := cloudwatch.NewFromConfig(cfg)
 
+	log.Printf("Fetching quotas for service: %s (%s) in region: %s", svc.Name, svc.Code, region)
+
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
@@ -155,9 +158,10 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 		}
 	}
 
-	// Query CloudWatch for the last data point (last 7 days)
+	// Query CloudWatch for the last data point
+	// Try last 24 hours first, then expand if no data
 	endTime := time.Now()
-	startTime := endTime.Add(-7 * 24 * time.Hour)
+	startTime := endTime.Add(-24 * time.Hour)
 
 	input := &cloudwatch.GetMetricStatisticsInput{
 		Namespace:  usageMetric.MetricNamespace,
@@ -165,16 +169,25 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 		Dimensions: dimensions,
 		StartTime:  &startTime,
 		EndTime:    &endTime,
-		Period:     aws.Int32(3600), // 1 hour period
+		Period:     aws.Int32(300), // 5 minutes period for more recent data
 		Statistics: []cwtypes.Statistic{cwtypes.Statistic(stat)},
 	}
 
-	// Query CloudWatch (with timeout protection)
+	// Query CloudWatch
 	result, err := cwClient.GetMetricStatistics(ctx, input)
 	if err != nil {
-		// CloudWatch query failed, but we still mark that metrics exist
+		log.Printf("CloudWatch query failed for %s/%s: %v",
+			safeString(usageMetric.MetricNamespace),
+			safeString(usageMetric.MetricName), err)
 		return
 	}
+
+	// Debug log
+	log.Printf("CloudWatch query for %s - %s: namespace=%s, metric=%s, datapoints=%d",
+		quota.ServiceCode, quota.QuotaName,
+		safeString(usageMetric.MetricNamespace),
+		safeString(usageMetric.MetricName),
+		len(result.Datapoints))
 
 	// Find the most recent data point
 	if len(result.Datapoints) > 0 {
@@ -187,34 +200,42 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 
 		if latestDatapoint != nil {
 			// Extract the value based on the statistic
+			var value float64
 			switch stat {
 			case "Maximum":
 				if latestDatapoint.Maximum != nil {
-					quota.Usage = *latestDatapoint.Maximum
+					value = *latestDatapoint.Maximum
 				}
 			case "Average":
 				if latestDatapoint.Average != nil {
-					quota.Usage = *latestDatapoint.Average
+					value = *latestDatapoint.Average
 				}
 			case "Sum":
 				if latestDatapoint.Sum != nil {
-					quota.Usage = *latestDatapoint.Sum
+					value = *latestDatapoint.Sum
 				}
 			case "Minimum":
 				if latestDatapoint.Minimum != nil {
-					quota.Usage = *latestDatapoint.Minimum
+					value = *latestDatapoint.Minimum
 				}
 			default:
 				if latestDatapoint.Maximum != nil {
-					quota.Usage = *latestDatapoint.Maximum
+					value = *latestDatapoint.Maximum
 				}
 			}
 
-			// Calculate usage percentage
-			if quota.Value > 0 {
-				quota.UsagePercentage = (quota.Usage / quota.Value) * 100
+			if value > 0 {
+				quota.Usage = value
+				// Calculate usage percentage
+				if quota.Value > 0 {
+					quota.UsagePercentage = (quota.Usage / quota.Value) * 100
+				}
+				log.Printf("  ✓ Usage found: %.2f / %.2f (%.1f%%)",
+					quota.Usage, quota.Value, quota.UsagePercentage)
 			}
 		}
+	} else {
+		log.Printf("  ✗ No datapoints found for %s - %s", quota.ServiceCode, quota.QuotaName)
 	}
 }
 
