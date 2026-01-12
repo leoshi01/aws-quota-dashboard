@@ -3,8 +3,13 @@ package aws
 import (
 	"context"
 	"strings"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
+	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
+	sqtypes "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
 	"github.com/yuxishi/aws-quota-dashboard/internal/model"
 	"golang.org/x/sync/errgroup"
 )
@@ -86,6 +91,13 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 		ServiceCode: &svc.Code,
 	})
 
+	// Create CloudWatch client for this region
+	cfg, err := LoadConfig(ctx, region)
+	if err != nil {
+		return quotas, err
+	}
+	cwClient := cloudwatch.NewFromConfig(cfg)
+
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
@@ -105,62 +117,104 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 			if q.Value != nil {
 				quota.Value = *q.Value
 			}
-			
-			// Try to get usage metrics
-			f.enrichWithUsageMetrics(ctx, client, &quota)
-			
+
+			// Try to get usage metrics from CloudWatch
+			if q.UsageMetric != nil {
+				f.enrichWithUsageFromCloudWatch(ctx, cwClient, q.UsageMetric, &quota)
+			}
+
 			quotas = append(quotas, quota)
 		}
 	}
 	return quotas, nil
 }
 
-func (f *QuotaFetcher) enrichWithUsageMetrics(ctx context.Context, client *servicequotas.Client, quota *model.Quota) {
-	// Skip if quota code is empty
-	if quota.QuotaCode == "" {
+func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClient *cloudwatch.Client, usageMetric *sqtypes.MetricInfo, quota *model.Quota) {
+	if usageMetric.MetricNamespace == nil || usageMetric.MetricName == nil {
 		return
 	}
 
-	input := &servicequotas.GetAWSDefaultServiceQuotaInput{
-		ServiceCode: &quota.ServiceCode,
-		QuotaCode:   &quota.QuotaCode,
+	quota.HasUsageMetrics = true
+
+	// Determine the statistic to use (default to Maximum if not specified)
+	stat := "Maximum"
+	if usageMetric.MetricStatisticRecommendation != nil && *usageMetric.MetricStatisticRecommendation != "" {
+		stat = *usageMetric.MetricStatisticRecommendation
 	}
 
-	output, err := client.GetAWSDefaultServiceQuota(ctx, input)
-	if err != nil {
-		// Usage metrics may not be available for all quotas
-		return
-	}
-
-	if output.Quota != nil && output.Quota.UsageMetric != nil {
-		// Usage metrics are available
-		quota.HasUsageMetrics = true
-		
-		// Try to get the actual usage value
-		if output.Quota.UsageMetric.MetricStatisticRecommendation != nil {
-			// The usage metric data would typically come from CloudWatch
-			// For now, we mark that metrics are available
-			// In a production system, you'd query CloudWatch here
-			
-			// Note: The actual usage would require CloudWatch API calls
-			// which can be added based on the metric dimensions
+	// Prepare dimensions
+	var dimensions []cwtypes.Dimension
+	if usageMetric.MetricDimensions != nil {
+		for key, value := range usageMetric.MetricDimensions {
+			k := key
+			v := value
+			dimensions = append(dimensions, cwtypes.Dimension{
+				Name:  &k,
+				Value: &v,
+			})
 		}
 	}
 
-	// Alternative: try to get applied quota which might have usage info
-	appliedInput := &servicequotas.GetServiceQuotaInput{
-		ServiceCode: &quota.ServiceCode,
-		QuotaCode:   &quota.QuotaCode,
+	// Query CloudWatch for the last data point (last 7 days)
+	endTime := time.Now()
+	startTime := endTime.Add(-7 * 24 * time.Hour)
+
+	input := &cloudwatch.GetMetricStatisticsInput{
+		Namespace:  usageMetric.MetricNamespace,
+		MetricName: usageMetric.MetricName,
+		Dimensions: dimensions,
+		StartTime:  &startTime,
+		EndTime:    &endTime,
+		Period:     aws.Int32(3600), // 1 hour period
+		Statistics: []cwtypes.Statistic{cwtypes.Statistic(stat)},
 	}
 
-	appliedOutput, err := client.GetServiceQuota(ctx, appliedInput)
-	if err == nil && appliedOutput.Quota != nil && appliedOutput.Quota.UsageMetric != nil {
-		quota.HasUsageMetrics = true
+	// Query CloudWatch (with timeout protection)
+	result, err := cwClient.GetMetricStatistics(ctx, input)
+	if err != nil {
+		// CloudWatch query failed, but we still mark that metrics exist
+		return
 	}
 
-	// Calculate usage percentage if both usage and value are available
-	if quota.Usage > 0 && quota.Value > 0 {
-		quota.UsagePercentage = (quota.Usage / quota.Value) * 100
+	// Find the most recent data point
+	if len(result.Datapoints) > 0 {
+		var latestDatapoint *cwtypes.Datapoint
+		for i := range result.Datapoints {
+			if latestDatapoint == nil || result.Datapoints[i].Timestamp.After(*latestDatapoint.Timestamp) {
+				latestDatapoint = &result.Datapoints[i]
+			}
+		}
+
+		if latestDatapoint != nil {
+			// Extract the value based on the statistic
+			switch stat {
+			case "Maximum":
+				if latestDatapoint.Maximum != nil {
+					quota.Usage = *latestDatapoint.Maximum
+				}
+			case "Average":
+				if latestDatapoint.Average != nil {
+					quota.Usage = *latestDatapoint.Average
+				}
+			case "Sum":
+				if latestDatapoint.Sum != nil {
+					quota.Usage = *latestDatapoint.Sum
+				}
+			case "Minimum":
+				if latestDatapoint.Minimum != nil {
+					quota.Usage = *latestDatapoint.Minimum
+				}
+			default:
+				if latestDatapoint.Maximum != nil {
+					quota.Usage = *latestDatapoint.Maximum
+				}
+			}
+
+			// Calculate usage percentage
+			if quota.Value > 0 {
+				quota.UsagePercentage = (quota.Usage / quota.Value) * 100
+			}
+		}
 	}
 }
 

@@ -114,20 +114,18 @@
                 const res = await fetch('/api/config');
                 appConfig = await res.json();
                 
-                // Set default values in the form
+                // Set default region immediately
                 if (appConfig.default_region) {
                     document.getElementById('region').value = appConfig.default_region;
                 }
-                if (appConfig.default_service) {
-                    // Will be set after services are loaded
-                    setTimeout(() => {
-                        document.getElementById('service').value = appConfig.default_service;
-                    }, 500);
-                }
                 
+                // Default service will be set after services are loaded in loadServices()
                 console.log('Config loaded:', appConfig);
             } catch (err) {
                 console.error('Failed to load config:', err);
+                // Set fallback defaults
+                appConfig.default_region = 'us-east-1';
+                appConfig.default_service = 'ec2';
             }
         }
 
@@ -153,6 +151,12 @@
                 const res = await fetch('/api/services?region=' + region);
                 const data = await res.json();
                 const select = document.getElementById('service');
+                
+                // Clear existing options (except "All Services")
+                while (select.options.length > 1) {
+                    select.remove(1);
+                }
+                
                 data.services.forEach(s => {
                     const option = document.createElement('option');
                     option.value = s.code;
@@ -160,9 +164,15 @@
                     select.appendChild(option);
                 });
                 
-                // Set default service if configured
-                if (appConfig.default_service) {
-                    select.value = appConfig.default_service;
+                // Set default service (fallback to 'ec2' if not configured)
+                const defaultService = appConfig.default_service || 'ec2';
+                select.value = defaultService;
+                
+                // Verify the selection worked
+                if (select.value !== defaultService) {
+                    console.warn(`Could not set default service to ${defaultService}, service may not exist in region`);
+                } else {
+                    console.log(`Default service set to: ${defaultService}`);
                 }
             } catch (err) {
                 console.error('Failed to load services:', err);

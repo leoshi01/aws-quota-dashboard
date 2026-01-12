@@ -28,8 +28,10 @@ Minimum required permissions:
 - `servicequotas:ListServiceQuotas`
 - `servicequotas:GetServiceQuota`
 - `ec2:DescribeRegions`
+- `cloudwatch:GetMetricStatistics` (for usage metrics)
+- `cloudwatch:ListMetrics` (for usage metrics)
 
-Or attach AWS managed policies: `ServiceQuotasReadOnlyAccess` + `AmazonEC2ReadOnlyAccess`
+Or attach AWS managed policies: `ServiceQuotasReadOnlyAccess` + `AmazonEC2ReadOnlyAccess` + `CloudWatchReadOnlyAccess`
 
 ### Run Locally
 
