@@ -121,9 +121,14 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 				quota.Value = *q.Value
 			}
 
-			// Try to get usage metrics from CloudWatch
+			// Try to get usage metrics from CloudWatch first
 			if q.UsageMetric != nil {
 				f.enrichWithUsageFromCloudWatch(ctx, cwClient, q.UsageMetric, &quota)
+			}
+
+			// Fallback to direct API if CloudWatch didn't provide usage data
+			if quota.Usage == 0 && !quota.HasUsageMetrics {
+				f.enrichWithDirectAPI(ctx, region, &quota)
 			}
 
 			quotas = append(quotas, quota)
@@ -157,6 +162,23 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 		len(result.Datapoints))
 
 	f.processCloudWatchResult(result, stat, quota)
+}
+
+func (f *QuotaFetcher) enrichWithDirectAPI(ctx context.Context, region string, quota *model.Quota) {
+	usage, err := f.GetUsageDirectly(ctx, region, quota)
+	if err != nil {
+		log.Printf("Direct API query failed for %s/%s: %v", quota.ServiceCode, quota.QuotaCode, err)
+		return
+	}
+
+	if usage > 0 {
+		quota.Usage = usage
+		if quota.Value > 0 {
+			quota.UsagePercentage = (quota.Usage / quota.Value) * 100
+		}
+		log.Printf("  ✓ Usage from Direct API: %.2f / %.2f (%.1f%%) - %s",
+			quota.Usage, quota.Value, quota.UsagePercentage, quota.QuotaName)
+	}
 }
 
 func getStatisticFromRecommendation(recommendation *string) string {

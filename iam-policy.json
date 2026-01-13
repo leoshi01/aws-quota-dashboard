@@ -27,6 +27,33 @@
                 "cloudwatch:ListMetrics"
             ],
             "Resource": "*"
+        },
+        {
+            "Sid": "DirectAPIUsageCollection",
+            "Effect": "Allow",
+            "Action": [
+                "eks:ListClusters",
+                "ec2:DescribeInstances",
+                "ec2:DescribeAddresses",
+                "ec2:DescribeVolumes",
+                "ec2:DescribeVpcs",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DescribeSecurityGroups",
+                "elasticloadbalancing:DescribeLoadBalancers",
+                "elasticloadbalancing:DescribeTargetGroups",
+                "autoscaling:DescribeAutoScalingGroups"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "StringEquals": {
+                    "aws:RequestedRegion": [
+                        "us-east-1",
+                        "us-west-2",
+                        "eu-west-1",
+                        "ap-southeast-1"
+                    ]
+                }
+            }
         }
     ]
 }
