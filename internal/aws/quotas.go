@@ -176,7 +176,7 @@ func (f *QuotaFetcher) enrichWithDirectAPI(ctx context.Context, region string, q
 		if quota.Value > 0 {
 			quota.UsagePercentage = (quota.Usage / quota.Value) * 100
 		}
-		log.Printf("  [SUCCESS] Usage from Direct API: %.2f / %.2f (%.1f%%) - %s",
+		log.Printf("  ✓ Usage from Direct API: %.2f / %.2f (%.1f%%) - %s",
 			quota.Usage, quota.Value, quota.UsagePercentage, quota.QuotaName)
 	}
 }
@@ -220,7 +220,7 @@ func (f *QuotaFetcher) queryCloudWatch(ctx context.Context, cwClient *cloudwatch
 
 func (f *QuotaFetcher) processCloudWatchResult(result *cloudwatch.GetMetricStatisticsOutput, stat string, quota *model.Quota) {
 	if len(result.Datapoints) == 0 {
-		log.Printf("  [WARN] No datapoints found for %s - %s", quota.ServiceCode, quota.QuotaName)
+		log.Printf("  ✗ No datapoints found for %s - %s", quota.ServiceCode, quota.QuotaName)
 		return
 	}
 
@@ -232,7 +232,7 @@ func (f *QuotaFetcher) processCloudWatchResult(result *cloudwatch.GetMetricStati
 	value := extractValueFromDatapoint(latestDatapoint, stat)
 	if value > 0 {
 		updateQuotaUsage(quota, value)
-		log.Printf("  [SUCCESS] Usage found: %.2f / %.2f (%.1f%%)",
+		log.Printf("  ✓ Usage found: %.2f / %.2f (%.1f%%)",
 			quota.Usage, quota.Value, quota.UsagePercentage)
 	}
 }
