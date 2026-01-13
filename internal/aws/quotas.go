@@ -165,13 +165,15 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 }
 
 func (f *QuotaFetcher) enrichWithDirectAPI(ctx context.Context, region string, quota *model.Quota) {
-	usage, err := f.GetUsageDirectly(ctx, region, quota)
+	usage, supported, err := f.GetUsageDirectly(ctx, region, quota)
 	if err != nil {
 		log.Printf("Direct API query failed for %s/%s: %v", quota.ServiceCode, quota.QuotaCode, err)
 		return
 	}
 
-	if usage > 0 {
+	// 只有当直接API支持该配额时才设置数据
+	if supported {
+		quota.HasUsageMetrics = true
 		quota.Usage = usage
 		if quota.Value > 0 {
 			quota.UsagePercentage = (quota.Usage / quota.Value) * 100

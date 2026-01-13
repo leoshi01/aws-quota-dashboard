@@ -50,29 +50,30 @@ type UsageHandler struct {
 }
 
 // GetUsageDirectly attempts to get usage via direct API calls
-func (f *QuotaFetcher) GetUsageDirectly(ctx context.Context, region string, quota *model.Quota) (float64, error) {
+// Returns (usage, true, nil) if successful, (0, false, nil) if not supported
+func (f *QuotaFetcher) GetUsageDirectly(ctx context.Context, region string, quota *model.Quota) (float64, bool, error) {
 	handler, exists := QuotaCodeToServiceMapping[quota.QuotaCode]
 	if !exists {
-		return 0, nil // No direct handler available
+		return 0, false, nil // No direct handler available
 	}
 
 	// Only call if service codes match
 	if handler.ServiceCode != quota.ServiceCode {
-		return 0, nil
+		return 0, false, nil
 	}
 
 	cfg, err := LoadConfig(ctx, region)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	usage, err := handler.Handler(ctx, cfg, region)
 	if err != nil {
 		log.Printf("Direct API failed for %s/%s: %v", quota.ServiceCode, quota.QuotaCode, err)
-		return 0, err
+		return 0, false, err
 	}
 
-	return usage, nil
+	return usage, true, nil // 返回true表示成功获取到数据（即使是0）
 }
 
 // ============================================================================
