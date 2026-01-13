@@ -121,14 +121,12 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 				quota.Value = *q.Value
 			}
 
-			// Try to get usage metrics from CloudWatch first
-			if q.UsageMetric != nil {
-				f.enrichWithUsageFromCloudWatch(ctx, cwClient, q.UsageMetric, &quota)
-			}
+			// Priority 1: Try to get usage from Direct API (real-time, accurate)
+			f.enrichWithDirectAPI(ctx, region, &quota)
 
-			// Fallback to direct API if CloudWatch didn't provide usage data
-			if quota.Usage == 0 && !quota.HasUsageMetrics {
-				f.enrichWithDirectAPI(ctx, region, &quota)
+			// Priority 2: Fallback to CloudWatch if Direct API doesn't support this quota
+			if !quota.HasUsageMetrics && q.UsageMetric != nil {
+				f.enrichWithUsageFromCloudWatch(ctx, cwClient, q.UsageMetric, &quota)
 			}
 
 			quotas = append(quotas, quota)
@@ -171,14 +169,14 @@ func (f *QuotaFetcher) enrichWithDirectAPI(ctx context.Context, region string, q
 		return
 	}
 
-	// 只有当直接API支持该配额时才设置数据
+	// Only set data when direct API supports this quota
 	if supported {
 		quota.HasUsageMetrics = true
 		quota.Usage = usage
 		if quota.Value > 0 {
 			quota.UsagePercentage = (quota.Usage / quota.Value) * 100
 		}
-		log.Printf("  ✓ Usage from Direct API: %.2f / %.2f (%.1f%%) - %s",
+		log.Printf("  [SUCCESS] Usage from Direct API: %.2f / %.2f (%.1f%%) - %s",
 			quota.Usage, quota.Value, quota.UsagePercentage, quota.QuotaName)
 	}
 }
@@ -222,7 +220,7 @@ func (f *QuotaFetcher) queryCloudWatch(ctx context.Context, cwClient *cloudwatch
 
 func (f *QuotaFetcher) processCloudWatchResult(result *cloudwatch.GetMetricStatisticsOutput, stat string, quota *model.Quota) {
 	if len(result.Datapoints) == 0 {
-		log.Printf("  ✗ No datapoints found for %s - %s", quota.ServiceCode, quota.QuotaName)
+		log.Printf("  [WARN] No datapoints found for %s - %s", quota.ServiceCode, quota.QuotaName)
 		return
 	}
 
@@ -234,7 +232,7 @@ func (f *QuotaFetcher) processCloudWatchResult(result *cloudwatch.GetMetricStati
 	value := extractValueFromDatapoint(latestDatapoint, stat)
 	if value > 0 {
 		updateQuotaUsage(quota, value)
-		log.Printf("  ✓ Usage found: %.2f / %.2f (%.1f%%)",
+		log.Printf("  [SUCCESS] Usage found: %.2f / %.2f (%.1f%%)",
 			quota.Usage, quota.Value, quota.UsagePercentage)
 	}
 }

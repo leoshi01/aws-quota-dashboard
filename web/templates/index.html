@@ -57,6 +57,7 @@
                 <div>
                     <span id="quota-count" class="text-gray-600">0 quotas</span>
                     <span id="cache-status" class="ml-2 text-sm text-gray-500"></span>
+                    <span class="ml-3 text-xs text-blue-600">Sorted: Usage data first, then by % desc</span>
                 </div>
                 <div class="flex gap-2">
                     <button onclick="exportJSON()" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm transition-colors">
@@ -223,7 +224,22 @@
                 return;
             }
 
-            tbody.innerHTML = quotas.map(q => {
+            // Sort: Show quotas with usage data first, then sort by usage percentage descending
+            const sortedQuotas = [...quotas].sort((a, b) => {
+                // 1. Prioritize quotas with metrics
+                if (a.has_usage_metrics && !b.has_usage_metrics) return -1;
+                if (!a.has_usage_metrics && b.has_usage_metrics) return 1;
+                
+                // 2. Sort by usage percentage descending (high usage first)
+                if (a.has_usage_metrics && b.has_usage_metrics) {
+                    return (b.usage_percentage || 0) - (a.usage_percentage || 0);
+                }
+                
+                // 3. Sort quotas without metrics by service name
+                return a.service_name.localeCompare(b.service_name);
+            });
+
+            tbody.innerHTML = sortedQuotas.map(q => {
                 const usage = q.usage || 0;
                 const usagePercent = q.usage_percentage || 0;
                 const hasUsage = q.has_usage_metrics;

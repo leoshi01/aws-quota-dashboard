@@ -33,6 +33,9 @@
             "Effect": "Allow",
             "Action": [
                 "eks:ListClusters",
+                "eks:ListNodegroups",
+                "eks:ListFargateProfiles",
+                "eks:ListAddons",
                 "ec2:DescribeInstances",
                 "ec2:DescribeAddresses",
                 "ec2:DescribeVolumes",
@@ -41,19 +44,23 @@
                 "ec2:DescribeSecurityGroups",
                 "elasticloadbalancing:DescribeLoadBalancers",
                 "elasticloadbalancing:DescribeTargetGroups",
-                "autoscaling:DescribeAutoScalingGroups"
+                "autoscaling:DescribeAutoScalingGroups",
+                "s3:ListAllMyBuckets",
+                "lambda:ListFunctions",
+                "rds:DescribeDBInstances",
+                "rds:DescribeDBClusters",
+                "dynamodb:ListTables",
+                "cloudfront:ListDistributions",
+                "route53:ListHostedZones",
+                "iam:ListUsers",
+                "iam:ListRoles",
+                "iam:ListGroups",
+                "iam:ListPolicies",
+                "sns:ListTopics",
+                "sqs:ListQueues",
+                "ecr:DescribeRepositories"
             ],
-            "Resource": "*",
-            "Condition": {
-                "StringEquals": {
-                    "aws:RequestedRegion": [
-                        "us-east-1",
-                        "us-west-2",
-                        "eu-west-1",
-                        "ap-southeast-1"
-                    ]
-                }
-            }
+            "Resource": "*"
         }
     ]
 }
