@@ -27,6 +27,45 @@
                 "cloudwatch:ListMetrics"
             ],
             "Resource": "*"
+        },
+        {
+            "Sid": "DirectAPIUsageCollection",
+            "Effect": "Allow",
+            "Action": [
+                "eks:ListClusters",
+                "eks:ListNodegroups",
+                "eks:ListFargateProfiles",
+                "eks:ListAddons",
+                "ec2:DescribeInstances",
+                "ec2:DescribeAddresses",
+                "ec2:DescribeVolumes",
+                "ec2:DescribeVpcs",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DescribeSecurityGroups",
+                "ec2:DescribeKeyPairs",
+                "ec2:DescribeImages",
+                "ec2:DescribeSnapshots",
+                "ec2:DescribeInternetGateways",
+                "ec2:DescribeNatGateways",
+                "elasticloadbalancing:DescribeLoadBalancers",
+                "elasticloadbalancing:DescribeTargetGroups",
+                "autoscaling:DescribeAutoScalingGroups",
+                "s3:ListAllMyBuckets",
+                "lambda:ListFunctions",
+                "rds:DescribeDBInstances",
+                "rds:DescribeDBClusters",
+                "dynamodb:ListTables",
+                "cloudfront:ListDistributions",
+                "route53:ListHostedZones",
+                "iam:ListUsers",
+                "iam:ListRoles",
+                "iam:ListGroups",
+                "iam:ListPolicies",
+                "sns:ListTopics",
+                "sqs:ListQueues",
+                "ecr:DescribeRepositories"
+            ],
+            "Resource": "*"
         }
     ]
 }
