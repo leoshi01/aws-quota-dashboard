@@ -37,6 +37,11 @@ var QuotaCodeToServiceMapping = map[string]UsageHandler{
 	// EC2
 	"L-1216C47A": {ServiceCode: "ec2", Handler: getEC2RunningInstancesUsage},
 	"L-0263D0A3": {ServiceCode: "ec2", Handler: getElasticIPsUsage},
+	"L-0E3CBAB9": {ServiceCode: "ec2", Handler: getEC2KeyPairsUsage},
+	"L-0DA580E9": {ServiceCode: "ec2", Handler: getEC2AMIsUsage},
+	"L-309BACF6": {ServiceCode: "ec2", Handler: getEC2SnapshotsUsage},
+	"L-407747CB": {ServiceCode: "ec2", Handler: getEC2InternetGatewaysUsage},
+	"L-FE5A380F": {ServiceCode: "ec2", Handler: getEC2NATGatewaysUsage},
 
 	// EBS
 	"L-D18FCD1D": {ServiceCode: "ebs", Handler: getEBSGP2Usage},
@@ -253,6 +258,99 @@ func getElasticIPsUsage(ctx context.Context, cfg aws.Config, _ string) (float64,
 		return 0, err
 	}
 	return float64(len(result.Addresses)), nil
+}
+
+func getEC2KeyPairsUsage(ctx context.Context, cfg aws.Config, _ string) (float64, error) {
+	client := ec2.NewFromConfig(cfg)
+	result, err := client.DescribeKeyPairs(ctx, &ec2.DescribeKeyPairsInput{})
+	if err != nil {
+		return 0, err
+	}
+	return float64(len(result.KeyPairs)), nil
+}
+
+func getEC2AMIsUsage(ctx context.Context, cfg aws.Config, _ string) (float64, error) {
+	client := ec2.NewFromConfig(cfg)
+
+	// Only count AMIs owned by this account
+	owners := []string{"self"}
+	count := 0
+
+	paginator := ec2.NewDescribeImagesPaginator(client, &ec2.DescribeImagesInput{
+		Owners: owners,
+	})
+
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		count += len(output.Images)
+	}
+
+	return float64(count), nil
+}
+
+func getEC2SnapshotsUsage(ctx context.Context, cfg aws.Config, _ string) (float64, error) {
+	client := ec2.NewFromConfig(cfg)
+
+	// Only count snapshots owned by this account
+	ownerIDs := []string{"self"}
+	count := 0
+
+	paginator := ec2.NewDescribeSnapshotsPaginator(client, &ec2.DescribeSnapshotsInput{
+		OwnerIds: ownerIDs,
+	})
+
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		count += len(output.Snapshots)
+	}
+
+	return float64(count), nil
+}
+
+func getEC2InternetGatewaysUsage(ctx context.Context, cfg aws.Config, _ string) (float64, error) {
+	client := ec2.NewFromConfig(cfg)
+
+	count := 0
+	paginator := ec2.NewDescribeInternetGatewaysPaginator(client, &ec2.DescribeInternetGatewaysInput{})
+
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		count += len(output.InternetGateways)
+	}
+
+	return float64(count), nil
+}
+
+func getEC2NATGatewaysUsage(ctx context.Context, cfg aws.Config, _ string) (float64, error) {
+	client := ec2.NewFromConfig(cfg)
+
+	count := 0
+	paginator := ec2.NewDescribeNatGatewaysPaginator(client, &ec2.DescribeNatGatewaysInput{})
+
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		// Only count available NAT gateways (not deleted/failed ones)
+		for _, natGw := range output.NatGateways {
+			if natGw.State == ec2types.NatGatewayStateAvailable ||
+				natGw.State == ec2types.NatGatewayStatePending {
+				count++
+			}
+		}
+	}
+
+	return float64(count), nil
 }
 
 // ============================================================================
