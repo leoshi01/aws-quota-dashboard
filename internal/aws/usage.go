@@ -225,6 +225,14 @@ func getEKSClusterResourceCount(ctx context.Context, client *eks.Client, countFu
 // ============================================================================
 
 func getEC2RunningInstancesUsage(ctx context.Context, cfg aws.Config, _ string) (float64, error) {
+	return getEC2VCPUUsageByInstanceFamily(ctx, cfg, standardInstanceFamilies)
+}
+
+// standardInstanceFamilies contains instance type prefixes for Standard On-Demand vCPU quota (L-1216C47A)
+var standardInstanceFamilies = []string{"a", "c", "d", "h", "i", "m", "r", "t", "z"}
+
+// getEC2VCPUUsageByInstanceFamily calculates total vCPU usage for specified instance families
+func getEC2VCPUUsageByInstanceFamily(ctx context.Context, cfg aws.Config, families []string) (float64, error) {
 	client := ec2.NewFromConfig(cfg)
 
 	input := &ec2.DescribeInstancesInput{
@@ -236,7 +244,7 @@ func getEC2RunningInstancesUsage(ctx context.Context, cfg aws.Config, _ string) 
 		},
 	}
 
-	count := 0
+	totalVCPUs := 0
 	paginator := ec2.NewDescribeInstancesPaginator(client, input)
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
@@ -244,11 +252,41 @@ func getEC2RunningInstancesUsage(ctx context.Context, cfg aws.Config, _ string) 
 			return 0, err
 		}
 		for _, reservation := range output.Reservations {
-			count += len(reservation.Instances)
+			for _, instance := range reservation.Instances {
+				// Check if instance type belongs to the specified families
+				if instance.InstanceType == "" {
+					continue
+				}
+				instanceType := string(instance.InstanceType)
+				if !isInstanceInFamilies(instanceType, families) {
+					continue
+				}
+
+				// Get vCPU count from CpuOptions
+				if instance.CpuOptions != nil && instance.CpuOptions.CoreCount != nil && instance.CpuOptions.ThreadsPerCore != nil {
+					vcpus := int(*instance.CpuOptions.CoreCount) * int(*instance.CpuOptions.ThreadsPerCore)
+					totalVCPUs += vcpus
+				}
+			}
 		}
 	}
 
-	return float64(count), nil
+	return float64(totalVCPUs), nil
+}
+
+// isInstanceInFamilies checks if an instance type belongs to any of the specified families
+func isInstanceInFamilies(instanceType string, families []string) bool {
+	if len(instanceType) == 0 {
+		return false
+	}
+	// Instance type format: <family><generation>.<size> e.g., m5.large, c6i.xlarge
+	firstChar := strings.ToLower(string(instanceType[0]))
+	for _, family := range families {
+		if firstChar == family {
+			return true
+		}
+	}
+	return false
 }
 
 func getElasticIPsUsage(ctx context.Context, cfg aws.Config, _ string) (float64, error) {

@@ -97,6 +97,7 @@ func (h *Handler) GetQuotas(c *gin.Context) {
 
 	cacheKey := "quotas:" + regionParam + ":" + serviceFilter
 	var quotas []model.Quota
+	var warnings []string
 	fromCache := false
 
 	if cached, ok := h.cache.Get(cacheKey); ok {
@@ -106,12 +107,13 @@ func (h *Handler) GetQuotas(c *gin.Context) {
 		}
 		fromCache = true
 	} else {
-		var err error
-		quotas, err = h.fetcher.GetQuotasForAllRegions(c.Request.Context(), regions, serviceFilter)
+		result, err := h.fetcher.GetQuotasForAllRegions(c.Request.Context(), regions, serviceFilter)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		quotas = result.Quotas
+		warnings = result.Warnings
 		h.cache.Set(cacheKey, quotas)
 	}
 
@@ -133,6 +135,7 @@ func (h *Handler) GetQuotas(c *gin.Context) {
 		Total:     len(quotas),
 		FetchedAt: time.Now(),
 		FromCache: fromCache,
+		Warnings:  warnings,
 	})
 }
 
