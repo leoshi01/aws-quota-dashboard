@@ -1,6 +1,6 @@
 module github.com/yuxishi/aws-quota-dashboard
 
-go 1.23
+go 1.24.0
 
 toolchain go1.24.4
 
@@ -25,6 +25,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.21
 	github.com/gin-gonic/gin v1.9.1
 	golang.org/x/sync v0.6.0
+	golang.org/x/time v0.14.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

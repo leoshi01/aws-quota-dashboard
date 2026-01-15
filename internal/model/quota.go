@@ -22,6 +22,7 @@ type QuotaResponse struct {
 	Total     int       `json:"total"`
 	FetchedAt time.Time `json:"fetched_at"`
 	FromCache bool      `json:"from_cache"`
+	Warnings  []string  `json:"warnings,omitempty"`
 }
 
 type Region struct {

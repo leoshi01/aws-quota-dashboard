@@ -2,8 +2,10 @@ package aws
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -13,20 +15,29 @@ import (
 	sqtypes "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
 	"github.com/yuxishi/aws-quota-dashboard/internal/model"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 type QuotaFetcher struct {
 	maxConcurrency int
+	limiter        *rate.Limiter
 }
 
 func NewQuotaFetcher(maxConcurrency int) *QuotaFetcher {
 	if maxConcurrency <= 0 {
 		maxConcurrency = 10
 	}
-	return &QuotaFetcher{maxConcurrency: maxConcurrency}
+	return &QuotaFetcher{
+		maxConcurrency: maxConcurrency,
+		limiter:        rate.NewLimiter(rate.Limit(5), 10),
+	}
 }
 
 func (f *QuotaFetcher) GetServices(ctx context.Context, region string) ([]model.Service, error) {
+	if err := f.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
+
 	cfg, err := LoadConfig(ctx, region)
 	if err != nil {
 		return nil, err
@@ -37,6 +48,9 @@ func (f *QuotaFetcher) GetServices(ctx context.Context, region string) ([]model.
 	paginator := servicequotas.NewListServicesPaginator(client, &servicequotas.ListServicesInput{})
 
 	for paginator.HasMorePages() {
+		if err := f.limiter.Wait(ctx); err != nil {
+			return nil, err
+		}
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
 			return nil, err
@@ -87,60 +101,98 @@ func (f *QuotaFetcher) GetQuotasForRegion(ctx context.Context, region string, se
 }
 
 func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *servicequotas.Client, region string, svc model.Service) ([]model.Quota, error) {
-	var quotas []model.Quota
-	paginator := servicequotas.NewListServiceQuotasPaginator(client, &servicequotas.ListServiceQuotasInput{
-		ServiceCode: &svc.Code,
-	})
-
-	// Create CloudWatch client for this region
 	cfg, err := LoadConfig(ctx, region)
 	if err != nil {
-		return quotas, err
+		return nil, err
 	}
 	cwClient := cloudwatch.NewFromConfig(cfg)
 
 	log.Printf("Fetching quotas for service: %s (%s) in region: %s", svc.Name, svc.Code, region)
 
+	quotaMap := make(map[string]*sqtypes.ServiceQuota)
+
+	f.fetchDefaultQuotas(ctx, client, svc.Code, quotaMap)
+	f.fetchAppliedQuotas(ctx, client, svc.Code, quotaMap)
+
+	return f.buildQuotaList(ctx, cwClient, region, svc, quotaMap), nil
+}
+
+func (f *QuotaFetcher) fetchDefaultQuotas(ctx context.Context, client *servicequotas.Client, serviceCode string, quotaMap map[string]*sqtypes.ServiceQuota) {
+	paginator := servicequotas.NewListAWSDefaultServiceQuotasPaginator(client, &servicequotas.ListAWSDefaultServiceQuotasInput{
+		ServiceCode: &serviceCode,
+	})
 	for paginator.HasMorePages() {
+		if err := f.limiter.Wait(ctx); err != nil {
+			return
+		}
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			return quotas, err
+			log.Printf("Failed to get default quotas for %s: %v", serviceCode, err)
+			return
 		}
-		for _, q := range output.Quotas {
-			quota := model.Quota{
-				Region:      region,
-				ServiceCode: svc.Code,
-				ServiceName: svc.Name,
-				QuotaName:   safeString(q.QuotaName),
-				QuotaCode:   safeString(q.QuotaCode),
-				Unit:        safeString(q.Unit),
-				Adjustable:  q.Adjustable,
-				Global:      q.GlobalQuota,
+		for i := range output.Quotas {
+			q := output.Quotas[i]
+			if q.QuotaCode != nil {
+				quotaMap[*q.QuotaCode] = &q
 			}
-			if q.Value != nil {
-				quota.Value = *q.Value
-			}
-
-			// Priority 1: Try to get usage from Direct API (real-time, accurate)
-			f.enrichWithDirectAPI(ctx, region, &quota)
-
-			// Priority 2: Fallback to CloudWatch if Direct API doesn't support this quota
-			if !quota.HasUsageMetrics && q.UsageMetric != nil {
-				f.enrichWithUsageFromCloudWatch(ctx, cwClient, q.UsageMetric, &quota)
-			}
-
-			quotas = append(quotas, quota)
 		}
 	}
-	return quotas, nil
+}
+
+func (f *QuotaFetcher) fetchAppliedQuotas(ctx context.Context, client *servicequotas.Client, serviceCode string, quotaMap map[string]*sqtypes.ServiceQuota) {
+	paginator := servicequotas.NewListServiceQuotasPaginator(client, &servicequotas.ListServiceQuotasInput{
+		ServiceCode: &serviceCode,
+	})
+	for paginator.HasMorePages() {
+		if err := f.limiter.Wait(ctx); err != nil {
+			return
+		}
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			log.Printf("Failed to get applied quotas for %s: %v", serviceCode, err)
+			return
+		}
+		for i := range output.Quotas {
+			q := output.Quotas[i]
+			if q.QuotaCode != nil {
+				quotaMap[*q.QuotaCode] = &q
+			}
+		}
+	}
+}
+
+func (f *QuotaFetcher) buildQuotaList(ctx context.Context, cwClient *cloudwatch.Client, region string, svc model.Service, quotaMap map[string]*sqtypes.ServiceQuota) []model.Quota {
+	var quotas []model.Quota
+	for _, q := range quotaMap {
+		quota := model.Quota{
+			Region:      region,
+			ServiceCode: svc.Code,
+			ServiceName: svc.Name,
+			QuotaName:   safeString(q.QuotaName),
+			QuotaCode:   safeString(q.QuotaCode),
+			Unit:        safeString(q.Unit),
+			Adjustable:  q.Adjustable,
+			Global:      q.GlobalQuota,
+		}
+		if q.Value != nil {
+			quota.Value = *q.Value
+		}
+
+		f.enrichWithDirectAPI(ctx, region, &quota)
+
+		if !quota.HasUsageMetrics && q.UsageMetric != nil {
+			f.enrichWithUsageFromCloudWatch(ctx, cwClient, q.UsageMetric, &quota)
+		}
+
+		quotas = append(quotas, quota)
+	}
+	return quotas
 }
 
 func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClient *cloudwatch.Client, usageMetric *sqtypes.MetricInfo, quota *model.Quota) {
 	if usageMetric.MetricNamespace == nil || usageMetric.MetricName == nil {
 		return
 	}
-
-	quota.HasUsageMetrics = true
 
 	stat := getStatisticFromRecommendation(usageMetric.MetricStatisticRecommendation)
 	dimensions := buildCloudWatchDimensions(usageMetric.MetricDimensions)
@@ -150,6 +202,11 @@ func (f *QuotaFetcher) enrichWithUsageFromCloudWatch(ctx context.Context, cwClie
 		log.Printf("CloudWatch query failed for %s/%s: %v",
 			safeString(usageMetric.MetricNamespace),
 			safeString(usageMetric.MetricName), err)
+		return
+	}
+
+	if len(result.Datapoints) == 0 {
+		log.Printf("CloudWatch no datapoints for %s - %s", quota.ServiceCode, quota.QuotaName)
 		return
 	}
 
@@ -230,11 +287,10 @@ func (f *QuotaFetcher) processCloudWatchResult(result *cloudwatch.GetMetricStati
 	}
 
 	value := extractValueFromDatapoint(latestDatapoint, stat)
-	if value > 0 {
-		updateQuotaUsage(quota, value)
-		log.Printf("  ✓ Usage found: %.2f / %.2f (%.1f%%)",
-			quota.Usage, quota.Value, quota.UsagePercentage)
-	}
+	quota.HasUsageMetrics = true
+	updateQuotaUsage(quota, value)
+	log.Printf("  ✓ Usage found: %.2f / %.2f (%.1f%%)",
+		quota.Usage, quota.Value, quota.UsagePercentage)
 }
 
 func findLatestDatapoint(datapoints []cwtypes.Datapoint) *cwtypes.Datapoint {
@@ -280,18 +336,28 @@ func updateQuotaUsage(quota *model.Quota, value float64) {
 	}
 }
 
-func (f *QuotaFetcher) GetQuotasForAllRegions(ctx context.Context, regions []string, serviceFilter string) ([]model.Quota, error) {
+type FetchResult struct {
+	Quotas   []model.Quota
+	Warnings []string
+}
+
+func (f *QuotaFetcher) GetQuotasForAllRegions(ctx context.Context, regions []string, serviceFilter string) (*FetchResult, error) {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(f.maxConcurrency)
 
 	quotasChan := make(chan []model.Quota, len(regions))
+	var warnings []string
+	var warningsMu sync.Mutex
 
 	for _, region := range regions {
 		region := region
 		g.Go(func() error {
 			quotas, err := f.GetQuotasForRegion(ctx, region, serviceFilter)
 			if err != nil {
-				return nil // Don't fail entire operation for one region
+				warningsMu.Lock()
+				warnings = append(warnings, fmt.Sprintf("Failed to fetch quotas for region %s: %v", region, err))
+				warningsMu.Unlock()
+				return nil
 			}
 			quotasChan <- quotas
 			return nil
@@ -308,7 +374,30 @@ func (f *QuotaFetcher) GetQuotasForAllRegions(ctx context.Context, regions []str
 		allQuotas = append(allQuotas, quotas...)
 	}
 
-	return allQuotas, nil
+	allQuotas = deduplicateGlobalQuotas(allQuotas)
+
+	return &FetchResult{
+		Quotas:   allQuotas,
+		Warnings: warnings,
+	}, nil
+}
+
+func deduplicateGlobalQuotas(quotas []model.Quota) []model.Quota {
+	seen := make(map[string]bool)
+	var result []model.Quota
+
+	for _, q := range quotas {
+		if q.Global {
+			key := q.ServiceCode + ":" + q.QuotaCode
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			q.Region = "global"
+		}
+		result = append(result, q)
+	}
+	return result
 }
 
 func safeString(s *string) string {
