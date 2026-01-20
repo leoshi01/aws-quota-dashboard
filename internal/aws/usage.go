@@ -244,7 +244,9 @@ func getEC2VCPUUsageByInstanceFamily(ctx context.Context, cfg aws.Config, famili
 		},
 	}
 
-	totalVCPUs := 0
+	totalVCPUs := int64(0)
+	instanceTypeCounts := make(map[string]int)
+	cpuOptionsByType := make(map[string]ec2types.CpuOptions)
 	paginator := ec2.NewDescribeInstancesPaginator(client, input)
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
@@ -261,17 +263,75 @@ func getEC2VCPUUsageByInstanceFamily(ctx context.Context, cfg aws.Config, famili
 				if !isInstanceInFamilies(instanceType, families) {
 					continue
 				}
-
-				// Get vCPU count from CpuOptions
-				if instance.CpuOptions != nil && instance.CpuOptions.CoreCount != nil && instance.CpuOptions.ThreadsPerCore != nil {
-					vcpus := int(*instance.CpuOptions.CoreCount) * int(*instance.CpuOptions.ThreadsPerCore)
-					totalVCPUs += vcpus
+				instanceTypeCounts[instanceType]++
+				if instance.CpuOptions != nil {
+					cpuOptionsByType[instanceType] = *instance.CpuOptions
 				}
 			}
 		}
 	}
 
+	if len(instanceTypeCounts) == 0 {
+		return 0, nil
+	}
+
+	instanceTypes := make([]string, 0, len(instanceTypeCounts))
+	for instanceType := range instanceTypeCounts {
+		instanceTypes = append(instanceTypes, instanceType)
+	}
+
+	vcpuMap, err := getInstanceTypeVCPUs(ctx, client, instanceTypes)
+	if err != nil {
+		log.Printf("Failed to describe instance types for vCPU lookup: %v", err)
+	}
+
+	for instanceType, count := range instanceTypeCounts {
+		if vcpus, ok := vcpuMap[instanceType]; ok && vcpus > 0 {
+			totalVCPUs += int64(vcpus) * int64(count)
+			continue
+		}
+		if options, ok := cpuOptionsByType[instanceType]; ok && options.CoreCount != nil && options.ThreadsPerCore != nil {
+			vcpus := int64(*options.CoreCount) * int64(*options.ThreadsPerCore)
+			totalVCPUs += vcpus * int64(count)
+			continue
+		}
+		log.Printf("Missing vCPU info for instance type %s; skipping %d instances", instanceType, count)
+	}
+
 	return float64(totalVCPUs), nil
+}
+
+func getInstanceTypeVCPUs(ctx context.Context, client *ec2.Client, instanceTypes []string) (map[string]int32, error) {
+	vcpuMap := make(map[string]int32)
+	if len(instanceTypes) == 0 {
+		return vcpuMap, nil
+	}
+
+	const batchSize = 100
+	for start := 0; start < len(instanceTypes); start += batchSize {
+		end := start + batchSize
+		if end > len(instanceTypes) {
+			end = len(instanceTypes)
+		}
+		batch := make([]ec2types.InstanceType, 0, end-start)
+		for _, instanceType := range instanceTypes[start:end] {
+			batch = append(batch, ec2types.InstanceType(instanceType))
+		}
+		output, err := client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{
+			InstanceTypes: batch,
+		})
+		if err != nil {
+			return vcpuMap, err
+		}
+		for _, info := range output.InstanceTypes {
+			if info.InstanceType == "" || info.VCpuInfo == nil || info.VCpuInfo.DefaultVCpus == nil {
+				continue
+			}
+			vcpuMap[string(info.InstanceType)] = *info.VCpuInfo.DefaultVCpus
+		}
+	}
+
+	return vcpuMap, nil
 }
 
 // isInstanceInFamilies checks if an instance type belongs to any of the specified families

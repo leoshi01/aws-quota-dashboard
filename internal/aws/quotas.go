@@ -109,7 +109,7 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 
 	log.Printf("Fetching quotas for service: %s (%s) in region: %s", svc.Name, svc.Code, region)
 
-	quotaMap := make(map[string]*sqtypes.ServiceQuota)
+	quotaMap := make(map[string]sqtypes.ServiceQuota)
 
 	f.fetchDefaultQuotas(ctx, client, svc.Code, quotaMap)
 	f.fetchAppliedQuotas(ctx, client, svc.Code, quotaMap)
@@ -117,7 +117,7 @@ func (f *QuotaFetcher) getQuotasForService(ctx context.Context, client *serviceq
 	return f.buildQuotaList(ctx, cwClient, region, svc, quotaMap), nil
 }
 
-func (f *QuotaFetcher) fetchDefaultQuotas(ctx context.Context, client *servicequotas.Client, serviceCode string, quotaMap map[string]*sqtypes.ServiceQuota) {
+func (f *QuotaFetcher) fetchDefaultQuotas(ctx context.Context, client *servicequotas.Client, serviceCode string, quotaMap map[string]sqtypes.ServiceQuota) {
 	paginator := servicequotas.NewListAWSDefaultServiceQuotasPaginator(client, &servicequotas.ListAWSDefaultServiceQuotasInput{
 		ServiceCode: &serviceCode,
 	})
@@ -133,13 +133,13 @@ func (f *QuotaFetcher) fetchDefaultQuotas(ctx context.Context, client *servicequ
 		for i := range output.Quotas {
 			q := output.Quotas[i]
 			if q.QuotaCode != nil {
-				quotaMap[*q.QuotaCode] = &q
+				quotaMap[*q.QuotaCode] = q
 			}
 		}
 	}
 }
 
-func (f *QuotaFetcher) fetchAppliedQuotas(ctx context.Context, client *servicequotas.Client, serviceCode string, quotaMap map[string]*sqtypes.ServiceQuota) {
+func (f *QuotaFetcher) fetchAppliedQuotas(ctx context.Context, client *servicequotas.Client, serviceCode string, quotaMap map[string]sqtypes.ServiceQuota) {
 	paginator := servicequotas.NewListServiceQuotasPaginator(client, &servicequotas.ListServiceQuotasInput{
 		ServiceCode: &serviceCode,
 	})
@@ -155,13 +155,13 @@ func (f *QuotaFetcher) fetchAppliedQuotas(ctx context.Context, client *servicequ
 		for i := range output.Quotas {
 			q := output.Quotas[i]
 			if q.QuotaCode != nil {
-				quotaMap[*q.QuotaCode] = &q
+				quotaMap[*q.QuotaCode] = q
 			}
 		}
 	}
 }
 
-func (f *QuotaFetcher) buildQuotaList(ctx context.Context, cwClient *cloudwatch.Client, region string, svc model.Service, quotaMap map[string]*sqtypes.ServiceQuota) []model.Quota {
+func (f *QuotaFetcher) buildQuotaList(ctx context.Context, cwClient *cloudwatch.Client, region string, svc model.Service, quotaMap map[string]sqtypes.ServiceQuota) []model.Quota {
 	var quotas []model.Quota
 	for _, q := range quotaMap {
 		quota := model.Quota{
