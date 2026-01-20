@@ -235,6 +235,27 @@ var standardInstanceFamilies = []string{"a", "c", "d", "h", "i", "m", "r", "t", 
 func getEC2VCPUUsageByInstanceFamily(ctx context.Context, cfg aws.Config, families []string) (float64, error) {
 	client := ec2.NewFromConfig(cfg)
 
+	instanceTypeCounts, cpuOptionsByType, err := getRunningInstanceTypeCounts(ctx, client, families)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(instanceTypeCounts) == 0 {
+		return 0, nil
+	}
+
+	instanceTypes := collectInstanceTypes(instanceTypeCounts)
+
+	vcpuMap, err := getInstanceTypeVCPUs(ctx, client, instanceTypes)
+	if err != nil {
+		log.Printf("Failed to describe instance types for vCPU lookup: %v", err)
+	}
+
+	totalVCPUs := calculateTotalVCPUs(instanceTypeCounts, vcpuMap, cpuOptionsByType)
+	return float64(totalVCPUs), nil
+}
+
+func getRunningInstanceTypeCounts(ctx context.Context, client *ec2.Client, families []string) (map[string]int, map[string]ec2types.CpuOptions, error) {
 	input := &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
 			{
@@ -244,18 +265,16 @@ func getEC2VCPUUsageByInstanceFamily(ctx context.Context, cfg aws.Config, famili
 		},
 	}
 
-	totalVCPUs := int64(0)
 	instanceTypeCounts := make(map[string]int)
 	cpuOptionsByType := make(map[string]ec2types.CpuOptions)
 	paginator := ec2.NewDescribeInstancesPaginator(client, input)
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			return 0, err
+			return nil, nil, err
 		}
 		for _, reservation := range output.Reservations {
 			for _, instance := range reservation.Instances {
-				// Check if instance type belongs to the specified families
 				if instance.InstanceType == "" {
 					continue
 				}
@@ -271,20 +290,19 @@ func getEC2VCPUUsageByInstanceFamily(ctx context.Context, cfg aws.Config, famili
 		}
 	}
 
-	if len(instanceTypeCounts) == 0 {
-		return 0, nil
-	}
+	return instanceTypeCounts, cpuOptionsByType, nil
+}
 
+func collectInstanceTypes(instanceTypeCounts map[string]int) []string {
 	instanceTypes := make([]string, 0, len(instanceTypeCounts))
 	for instanceType := range instanceTypeCounts {
 		instanceTypes = append(instanceTypes, instanceType)
 	}
+	return instanceTypes
+}
 
-	vcpuMap, err := getInstanceTypeVCPUs(ctx, client, instanceTypes)
-	if err != nil {
-		log.Printf("Failed to describe instance types for vCPU lookup: %v", err)
-	}
-
+func calculateTotalVCPUs(instanceTypeCounts map[string]int, vcpuMap map[string]int32, cpuOptionsByType map[string]ec2types.CpuOptions) int64 {
+	totalVCPUs := int64(0)
 	for instanceType, count := range instanceTypeCounts {
 		if vcpus, ok := vcpuMap[instanceType]; ok && vcpus > 0 {
 			totalVCPUs += int64(vcpus) * int64(count)
@@ -297,8 +315,7 @@ func getEC2VCPUUsageByInstanceFamily(ctx context.Context, cfg aws.Config, famili
 		}
 		log.Printf("Missing vCPU info for instance type %s; skipping %d instances", instanceType, count)
 	}
-
-	return float64(totalVCPUs), nil
+	return totalVCPUs
 }
 
 func getInstanceTypeVCPUs(ctx context.Context, client *ec2.Client, instanceTypes []string) (map[string]int32, error) {
